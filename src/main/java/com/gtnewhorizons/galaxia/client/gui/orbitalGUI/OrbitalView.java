@@ -30,7 +30,6 @@ import com.gtnewhorizons.galaxia.registry.celestial.CelestialObject;
 import com.gtnewhorizons.galaxia.registry.orbital.OrbitalMechanics;
 import com.gtnewhorizons.galaxia.registry.orbital.OrbitalParams;
 import com.gtnewhorizons.galaxia.registry.orbital.OrbitalTransferPlanner;
-import com.gtnewhorizons.galaxia.registry.outpost.logistics.LogisticSignal;
 import com.gtnewhorizons.galaxia.registry.outpost.logistics.LogisticsDelivery;
 
 public class OrbitalView {
@@ -374,6 +373,8 @@ public class OrbitalView {
         private final OrbitalContextMenuWidget contextMenuWidget;
         private final LogisticsSignalsWidget signalsWidget;
         private boolean signalsOpen = false;
+        private final SolarSystemAssetPanelWidget assetsPanelWidget;
+        private boolean assetsPanelOpen = false;
         private boolean transfersHidden = false;
         private final OrbitalScene.OrbitalSceneFrameBuilder sceneFrameBuilder;
         private int lastRenderedLogisticsTaskRevision = Integer.MIN_VALUE;
@@ -930,6 +931,11 @@ public class OrbitalView {
                     }
                 });
             this.signalsWidget = new LogisticsSignalsWidget(root, () -> this.viewRoot, () -> this.signalsOpen);
+            this.assetsPanelWidget = new SolarSystemAssetPanelWidget(
+                root,
+                () -> this.viewRoot,
+                () -> this.assetsPanelOpen,
+                body -> assetActionController.openAssetManagement(assetUiState, body));
         }
 
         public OrbitalMapWidget withInitialLayer(CelestialObject layerRoot) {
@@ -977,6 +983,18 @@ public class OrbitalView {
 
         public void toggleSignals() {
             signalsOpen = !signalsOpen;
+        }
+
+        public SolarSystemAssetPanelWidget createAssetsPanelWidget() {
+            return assetsPanelWidget;
+        }
+
+        public boolean isAssetsPanelOpen() {
+            return assetsPanelOpen;
+        }
+
+        public void toggleAssetsPanel() {
+            assetsPanelOpen = !assetsPanelOpen;
         }
 
         public boolean areTransfersHidden() {
@@ -1460,9 +1478,9 @@ public class OrbitalView {
         }
 
         private boolean isMapBodyIcon(ResourceLocation texture) {
-            return texture != null && texture.getResourcePath() != null
-                && texture.getResourcePath()
-                    .contains("textures/gui/bodyicons/");
+            if (texture == null || texture.getResourcePath() == null) return false;
+            String path = texture.getResourcePath();
+            return path.contains("textures/gui/bodyicons/") || path.startsWith("textures/gui/icon_");
         }
 
         public void focusOn(CelestialObject body) {
@@ -2041,7 +2059,6 @@ public class OrbitalView {
                 .toStack(1)
                 .getDisplayName();
             String summary = delivery.data.amount() + " x " + itemName;
-            String transportLabel = formatTransportKindLabel(delivery.data.scope());
             double departureDisplayTime = mapServerOrbitalTimeToDisplay(delivery.data.departureOrbitalTime());
             double arrivalDisplayTime = mapServerOrbitalTimeToDisplay(
                 delivery.data.departureOrbitalTime() + delivery.data.tofOrbitalSeconds());
@@ -2050,7 +2067,7 @@ public class OrbitalView {
                 root,
                 sourceBody,
                 destinationBody,
-                transportLabel + " Package",
+                TransferPackageKind.HAMMER.displayName(),
                 summary,
                 departureDisplayTime,
                 displayedTof);
@@ -2068,13 +2085,8 @@ public class OrbitalView {
                 base.arrivalTime(),
                 base.trajectoryXs(),
                 base.trajectoryYs(),
-                base.trajectoryPointCount());
-        }
-
-        private String formatTransportKindLabel(LogisticSignal.Scope transportType) {
-            /// TODO: LOCALLIZE
-            if (transportType == null) return "Logistics";
-            return transportType.toString();
+                base.trajectoryPointCount(),
+                base.packageKind());
         }
 
         private void dispatchSimulatedTransfer() {

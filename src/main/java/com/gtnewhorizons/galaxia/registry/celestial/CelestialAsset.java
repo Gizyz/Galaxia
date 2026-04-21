@@ -15,6 +15,7 @@ import com.gtnewhorizons.galaxia.registry.interfaces.WithUUID;
 import com.gtnewhorizons.galaxia.registry.outpost.AutomatedOutpost;
 import com.gtnewhorizons.galaxia.registry.outpost.AutomatedStation;
 import com.gtnewhorizons.galaxia.registry.outpost.Station;
+import com.gtnewhorizons.galaxia.registry.outpost.WarningPriority;
 
 public abstract class CelestialAsset implements Buildable {
 
@@ -146,6 +147,18 @@ public abstract class CelestialAsset implements Buildable {
             if (amount > 0) return true;
         }
         return false;
+    }
+
+    public boolean hasMiningCapability() {
+        return false;
+    }
+
+    public boolean hasProductionCapability() {
+        return false;
+    }
+
+    public WarningPriority warningPriority() {
+        return WarningPriority.NONE;
     }
 
     public int getSyncRevision() {
