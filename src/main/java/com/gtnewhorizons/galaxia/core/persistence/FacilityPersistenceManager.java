@@ -44,6 +44,7 @@ import com.gtnewhorizons.galaxia.registry.outpost.ItemStackWrapper;
 import com.gtnewhorizons.galaxia.registry.outpost.LogisticsResourceConfig;
 import com.gtnewhorizons.galaxia.registry.outpost.Station;
 import com.gtnewhorizons.galaxia.registry.outpost.logistics.AllowShootingConfig;
+import com.gtnewhorizons.galaxia.registry.outpost.logistics.HammerTrajectoryLoadTracker;
 import com.gtnewhorizons.galaxia.registry.outpost.logistics.LogisticSignal;
 import com.gtnewhorizons.galaxia.registry.outpost.logistics.LogisticStore;
 import com.gtnewhorizons.galaxia.registry.outpost.logistics.LogisticsDelivery;
@@ -68,9 +69,9 @@ import com.gtnewhorizons.galaxia.registry.outpost.module.types.ModuleMiner;
 import com.gtnewhorizons.galaxia.registry.outpost.recipe.NotDoablePolicy;
 import com.gtnewhorizons.galaxia.registry.outpost.recipe.RecipeConfig;
 import com.gtnewhorizons.galaxia.registry.outpost.recipe.RecipeSchedulerMode;
-import com.gtnewhorizons.galaxia.registry.outpost.recipe.RecipeSlot;
-import com.gtnewhorizons.galaxia.registry.outpost.recipe.RecipeSlotList;
 import com.gtnewhorizons.galaxia.registry.outpost.recipe.RecipeSnapshot;
+import com.gtnewhorizons.galaxia.registry.outpost.recipe.SavedRecipe;
+import com.gtnewhorizons.galaxia.registry.outpost.recipe.SavedRecipeList;
 import com.gtnewhorizons.galaxia.registry.outpost.station.ModuleShape;
 import com.gtnewhorizons.galaxia.registry.outpost.station.PlacedTile;
 import com.gtnewhorizons.galaxia.registry.outpost.station.StationLayout;
@@ -109,6 +110,7 @@ public final class FacilityPersistenceManager {
         worldSaveDir = saveHandler.getWorldDirectory();
         CelestialAssetStore.clear();
         LogisticStore.clearDeliveries();
+        HammerTrajectoryLoadTracker.reset();
         loadAll();
     }
 
@@ -127,6 +129,7 @@ public final class FacilityPersistenceManager {
         if (worldSaveDir != null) saveAll();
         CelestialAssetStore.clear();
         LogisticStore.clearDeliveries();
+        HammerTrajectoryLoadTracker.reset();
         worldSaveDir = null;
     }
 
@@ -411,6 +414,8 @@ public final class FacilityPersistenceManager {
                     hammer.variant()
                         .name());
                 moduleData.addProperty("energyStored", hammer.energyStored());
+                moduleData.addProperty("shotCooldownTicks", hammer.shotCooldownTicks());
+                moduleData.addProperty("routeProbeCooldownTicks", hammer.routeProbeCooldownTicks());
             } else if (m.component() instanceof ModuleMiner miner) {
                 moduleData.addProperty(
                     "focusTier",
@@ -434,8 +439,8 @@ public final class FacilityPersistenceManager {
                     moduleData.addProperty("recipeOrderCursor", rc.orderCursor() & 0xFF);
                     moduleData.addProperty("recipeOrderRemaining", rc.orderRemaining() & 0xFF);
                     com.google.gson.JsonArray slotsArray = new com.google.gson.JsonArray();
-                    for (int i = 0; i < RecipeSlotList.MAX_RECIPE_SLOTS; i++) {
-                        RecipeSlot slot = rc.slots()
+                    for (int i = 0; i < SavedRecipeList.MAX_SAVED_RECIPES; i++) {
+                        SavedRecipe slot = rc.savedRecipes()
                             .getOrNull(i);
                         if (slot == null) continue;
                         com.google.gson.JsonObject slotObj = new com.google.gson.JsonObject();
@@ -453,14 +458,13 @@ public final class FacilityPersistenceManager {
                                 .contentHash());
                         writeRecipeSnapshot(slotObj, slot.recipe());
                         slotObj.addProperty("enabled", slot.enabled());
-                        slotObj.addProperty("inputGuard", slot.inputGuard());
-                        slotObj.addProperty("outputGuard", slot.outputGuard());
+                        slotObj.addProperty("requestAmount", slot.requestAmount());
                         slotObj.addProperty("priority", slot.priority() & 0xFF);
                         slotObj.addProperty("orderSize", slot.orderSize() & 0xFF);
                         slotObj.addProperty("slotIndex", i);
                         slotsArray.add(slotObj);
                     }
-                    moduleData.add("recipeSlots", slotsArray);
+                    moduleData.add("savedRecipes", slotsArray);
                 }
             }
             mj.data = moduleData;
@@ -485,6 +489,10 @@ public final class FacilityPersistenceManager {
                 e.getValue());
         }
         out.fluidBuffer = new LinkedHashMap<>(state.inventory.fluidSnapshot());
+        out.itemLowerBounds = encodeItemAmountMap(state.inventory.itemLowerBoundsSnapshot());
+        out.itemUpperBounds = encodeItemAmountMap(state.inventory.itemUpperBoundsSnapshot());
+        out.fluidLowerBounds = new LinkedHashMap<>(state.inventory.fluidLowerBoundsSnapshot());
+        out.fluidUpperBounds = new LinkedHashMap<>(state.inventory.fluidUpperBoundsSnapshot());
         out.logisticsConfig = new LinkedHashMap<>();
         for (Map.Entry<ItemStackWrapper, LogisticsResourceConfig> e : state.logisticsConfig.snapshot()
             .entrySet()) {
@@ -628,7 +636,11 @@ public final class FacilityPersistenceManager {
                                 "[PERSIST] Hammer module missing energyStored")
                             .getAsLong();
                         ModuleHammer.requireTier(variant, tier);
-                        module.setComponent(new ModuleHammer(kind, config, routePriority, variant, 64, energyStored));
+                        ModuleHammer hammer = new ModuleHammer(kind, config, routePriority, variant, 64, energyStored);
+                        hammer.setDispatchCooldowns(
+                            optionalInt(hammerData, "shotCooldownTicks", 0),
+                            optionalInt(hammerData, "routeProbeCooldownTicks", 0));
+                        module.setComponent(hammer);
                     }
                     case MINER -> {
                         if (!(module.component() instanceof ModuleMiner miner)) {
@@ -692,6 +704,18 @@ public final class FacilityPersistenceManager {
         }
         if (json.fluidBuffer != null) {
             state.inventory.loadFluidSnapshot(json.fluidBuffer);
+        }
+        if (json.itemLowerBounds != null) {
+            state.inventory.loadItemLowerBounds(decodeItemAmountMap(json.itemLowerBounds));
+        }
+        if (json.itemUpperBounds != null) {
+            state.inventory.loadItemUpperBounds(decodeItemAmountMap(json.itemUpperBounds));
+        }
+        if (json.fluidLowerBounds != null) {
+            state.inventory.loadFluidLowerBounds(json.fluidLowerBounds);
+        }
+        if (json.fluidUpperBounds != null) {
+            state.inventory.loadFluidUpperBounds(json.fluidUpperBounds);
         }
 
         if (json.logisticsConfig != null) {
@@ -853,6 +877,28 @@ public final class FacilityPersistenceManager {
         return requirements;
     }
 
+    private static Map<String, Long> encodeItemAmountMap(Map<ItemStackWrapper, Long> amounts) {
+        Map<String, Long> encoded = new LinkedHashMap<>();
+        if (amounts == null) return encoded;
+        for (Map.Entry<ItemStackWrapper, Long> entry : amounts.entrySet()) {
+            if (entry.getKey() != null && entry.getValue() >= 0L) encoded.put(
+                entry.getKey()
+                    .toKey(),
+                entry.getValue());
+        }
+        return encoded;
+    }
+
+    private static Map<ItemStackWrapper, Long> decodeItemAmountMap(Map<String, Long> encoded) {
+        Map<ItemStackWrapper, Long> decoded = new LinkedHashMap<>();
+        if (encoded == null || encoded.isEmpty()) return decoded;
+        for (Map.Entry<String, Long> entry : encoded.entrySet()) {
+            ItemStackWrapper key = ItemStackWrapper.fromKey(entry.getKey());
+            if (key != null && entry.getValue() >= 0L) decoded.put(key, entry.getValue());
+        }
+        return decoded;
+    }
+
     static final class AssetJson {
 
         CelestialAsset.ID assetId;
@@ -881,6 +927,10 @@ public final class FacilityPersistenceManager {
         List<ModuleJson> modules;
         Map<String, Long> buffer;
         Map<String, Long> fluidBuffer;
+        Map<String, Long> itemLowerBounds;
+        Map<String, Long> itemUpperBounds;
+        Map<String, Long> fluidLowerBounds;
+        Map<String, Long> fluidUpperBounds;
         Map<String, LogisticsConfigJson> logisticsConfig;
         List<StationTileJson> layoutTiles;
     }
@@ -1036,6 +1086,11 @@ public final class FacilityPersistenceManager {
             stacks[i] = wrapper.toStack(amount);
         }
         return stacks;
+    }
+
+    private static int optionalInt(JsonObject source, String key, int fallback) {
+        return source != null && source.has(key) ? source.get(key)
+            .getAsInt() : fallback;
     }
 
     private static void writeIntArray(JsonObject target, String key, int[] values) {
@@ -1374,10 +1429,10 @@ public final class FacilityPersistenceManager {
                 .getAsByte();
             byte orderRemaining = data.get("recipeOrderRemaining")
                 .getAsByte();
-            RecipeSlotList slots = new RecipeSlotList();
+            SavedRecipeList slots = new SavedRecipeList();
 
-            if (data.has("recipeSlots")) {
-                com.google.gson.JsonArray slotsArray = data.getAsJsonArray("recipeSlots");
+            if (data.has("savedRecipes")) {
+                com.google.gson.JsonArray slotsArray = data.getAsJsonArray("savedRecipes");
                 for (int i = 0; i < slotsArray.size(); i++) {
                     JsonObject slotObj = slotsArray.get(i)
                         .getAsJsonObject();
@@ -1389,16 +1444,14 @@ public final class FacilityPersistenceManager {
                         .getAsLong();
                     boolean enabled = slotObj.get("enabled")
                         .getAsBoolean();
-                    int inputGuard = slotObj.get("inputGuard")
-                        .getAsInt();
-                    int outputGuard = slotObj.get("outputGuard")
-                        .getAsInt();
+                    long requestAmount = slotObj.has("requestAmount") ? slotObj.get("requestAmount")
+                        .getAsLong() : 0L;
                     byte priority = slotObj.get("priority")
                         .getAsByte();
                     byte orderSize = slotObj.get("orderSize")
                         .getAsByte();
                     RecipeSnapshot ref = readRecipeSnapshot(slotObj, recipeMapOrdinal, recipeIndex, contentHash);
-                    RecipeSlot slot = new RecipeSlot(ref, enabled, inputGuard, outputGuard, priority, orderSize);
+                    SavedRecipe slot = new SavedRecipe(ref, enabled, requestAmount, priority, orderSize);
                     int slotIndex = slotObj.has("slotIndex") ? slotObj.get("slotIndex")
                         .getAsInt() : i;
                     slots.setOrAppend(slotIndex, slot);

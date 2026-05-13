@@ -3,9 +3,11 @@ package com.gtnewhorizons.galaxia.registry.outpost;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 import javax.annotation.Nullable;
@@ -25,6 +27,7 @@ import com.gtnewhorizons.galaxia.registry.outpost.module.operation.ModuleOperati
 import com.gtnewhorizons.galaxia.registry.outpost.module.operation.ModuleOperationPlan;
 import com.gtnewhorizons.galaxia.registry.outpost.module.operation.ModuleOperationState;
 import com.gtnewhorizons.galaxia.registry.outpost.module.types.ModuleMiner;
+import com.gtnewhorizons.galaxia.registry.outpost.station.CapacityCluster;
 import com.gtnewhorizons.galaxia.registry.outpost.station.LayoutCacheBundle;
 import com.gtnewhorizons.galaxia.registry.outpost.station.MutationKind;
 import com.gtnewhorizons.galaxia.registry.outpost.station.StationLayout;
@@ -58,9 +61,13 @@ public final class AutomatedFacility extends CelestialAsset {
 
     private final Set<ModuleInstance.ID> dirtyModuleIds = new HashSet<>();
     private final Set<ModuleInstance.ID> dirtyRemovedIds = new HashSet<>();
+    private final Map<ItemStackWrapper, Long> dirtyInventoryDeltas = new LinkedHashMap<>();
+    private final List<InventoryBoundDelta> dirtyInventoryBoundDeltas = new ArrayList<>();
+    private final Set<UUID> syncedPlayerIds = new HashSet<>();
     private final Set<String> dirtyMinerVoidChanceOreKeys = new HashSet<>();
 
     public static final long MAX_ENERGY = 8_000_000L;
+    public static final long BASE_ITEM_CAPACITY = 1000L;
 
     public AutomatedFacility(CelestialAsset.ID assetId, CelestialObjectId celestialBodyId, Kind kind, Status status) {
         super(assetId, celestialBodyId, kind, status, null);
@@ -235,7 +242,7 @@ public final class AutomatedFacility extends CelestialAsset {
         }
         Map<String, Long> deposited = new java.util.LinkedHashMap<>();
         for (Map.Entry<ItemStackWrapper, Long> material : requested.entrySet()) {
-            if (!inventory.tryConsume(material.getKey(), material.getValue())) {
+            if (!tryConsumeInventory(material.getKey(), material.getValue())) {
                 throw new IllegalStateException(
                     "Operation material reservation became inconsistent for module " + module.id
                         + ", item="
@@ -250,6 +257,66 @@ public final class AutomatedFacility extends CelestialAsset {
         }
         module.setOperation(operation.withDepositedResources(mergeAmounts(operation.depositedResources(), deposited)));
         markModuleDirty(module.id);
+        return true;
+    }
+
+    public long itemInventoryCapacity() {
+        long capacity = BASE_ITEM_CAPACITY;
+        for (CapacityCluster cluster : layoutCache.getCapacityClusters(FacilityModuleKind.STORAGE)) {
+            capacity += cluster.effectiveCapacity();
+        }
+        return capacity;
+    }
+
+    public long usedItemInventoryCapacity() {
+        return inventory.totalItems();
+    }
+
+    public long remainingItemInventoryCapacity() {
+        return Math.max(0L, itemInventoryCapacity() - usedItemInventoryCapacity());
+    }
+
+    public boolean isItemInventoryFull() {
+        return remainingItemInventoryCapacity() <= 0L;
+    }
+
+    public long insertInventory(ItemStackWrapper item, long amount) {
+        return insertInventory(item, amount, true);
+    }
+
+    public long insertInventoryWithoutSync(ItemStackWrapper item, long amount) {
+        return insertInventory(item, amount, false);
+    }
+
+    private long insertInventory(ItemStackWrapper item, long amount, boolean trackSync) {
+        if (item == null || amount <= 0L) return 0L;
+        long accepted = Math.min(amount, remainingItemInventoryCapacity());
+        if (accepted <= 0L) return 0L;
+        inventory.add(item, accepted);
+        if (trackSync) markInventoryDelta(item, accepted);
+        return accepted;
+    }
+
+    public long addInventory(ItemStackWrapper item, long delta) {
+        return addInventory(item, delta, true);
+    }
+
+    public long addInventoryWithoutSync(ItemStackWrapper item, long delta) {
+        return addInventory(item, delta, false);
+    }
+
+    private long addInventory(ItemStackWrapper item, long delta, boolean trackSync) {
+        if (item == null || delta == 0L) return 0L;
+        long actual = inventory.add(item, delta);
+        if (actual != 0L && trackSync) markInventoryDelta(item, actual);
+        return actual;
+    }
+
+    public boolean tryConsumeInventory(ItemStackWrapper item, long amount) {
+        if (item == null) return false;
+        if (amount <= 0L) return true;
+        if (!inventory.tryConsume(item, amount)) return false;
+        markInventoryDelta(item, -amount);
         return true;
     }
 
@@ -269,7 +336,7 @@ public final class AutomatedFacility extends CelestialAsset {
             long available = inventory.getAmount(material.getKey());
             long reserved = Math.min(available, remaining);
             if (reserved <= 0L) continue;
-            if (!inventory.tryConsume(material.getKey(), reserved)) {
+            if (!tryConsumeInventory(material.getKey(), reserved)) {
                 throw new IllegalStateException(
                     "Operation partial reservation became inconsistent for module " + module.id + ", item=" + itemKey);
             }
@@ -316,11 +383,20 @@ public final class AutomatedFacility extends CelestialAsset {
     public boolean flushModuleOperationRefund(ModuleInstance module) {
         ModuleOperationState operation = requireOperation(module);
         if (operation.phase() != ModuleOperationPhase.REFUNDING) return false;
+        Map<String, Long> remaining = new java.util.LinkedHashMap<>();
+        boolean changed = false;
         for (Map.Entry<String, Long> entry : operation.refundBuffer()
             .entrySet()) {
-            inventory.add(requireItemKey(entry.getKey(), module), entry.getValue());
+            ItemStackWrapper item = requireItemKey(entry.getKey(), module);
+            long accepted = insertInventory(item, entry.getValue());
+            if (accepted > 0L) changed = true;
+            long leftover = entry.getValue() - accepted;
+            if (leftover > 0L) remaining.put(entry.getKey(), leftover);
         }
-        if (isCompletionRefund(operation)) {
+        if (!changed) return false;
+        if (!remaining.isEmpty()) {
+            module.setOperation(operation.withRefundBuffer(remaining));
+        } else if (isCompletionRefund(operation)) {
             module.clearOperation();
         } else {
             module.setOperation(operation.finishRefunding());
@@ -486,6 +562,24 @@ public final class AutomatedFacility extends CelestialAsset {
         markDirty();
     }
 
+    @Override
+    public boolean isDirty() {
+        return super.isDirty() || !dirtyModuleIds.isEmpty()
+            || !dirtyRemovedIds.isEmpty()
+            || !dirtyInventoryDeltas.isEmpty()
+            || !dirtyInventoryBoundDeltas.isEmpty();
+    }
+
+    @Override
+    public boolean needsFullSyncFor(UUID playerId) {
+        return !syncedPlayerIds.contains(playerId);
+    }
+
+    @Override
+    public void markSyncedFor(UUID playerId) {
+        syncedPlayerIds.add(playerId);
+    }
+
     public List<ModuleInstance> drainDirtyModules() {
         List<ModuleInstance> result = new ArrayList<>(dirtyModuleIds.size());
         for (ModuleInstance.ID id : dirtyModuleIds) {
@@ -496,11 +590,43 @@ public final class AutomatedFacility extends CelestialAsset {
         return result;
     }
 
+    public Map<ItemStackWrapper, Long> drainDirtyInventoryDeltas() {
+        Map<ItemStackWrapper, Long> result = new LinkedHashMap<>(dirtyInventoryDeltas);
+        dirtyInventoryDeltas.clear();
+        return result;
+    }
+
+    public List<InventoryBoundDelta> drainDirtyInventoryBoundDeltas() {
+        List<InventoryBoundDelta> result = new ArrayList<>(dirtyInventoryBoundDeltas);
+        dirtyInventoryBoundDeltas.clear();
+        return result;
+    }
+
     public List<ModuleInstance.ID> drainRemovedIds() {
         List<ModuleInstance.ID> result = new ArrayList<>(dirtyRemovedIds);
         dirtyRemovedIds.clear();
         return result;
     }
+
+    private void markInventoryDelta(ItemStackWrapper item, long delta) {
+        if (item == null || delta == 0L) return;
+        dirtyInventoryDeltas.merge(item, delta, Long::sum);
+        if (dirtyInventoryDeltas.getOrDefault(item, 0L) == 0L) {
+            dirtyInventoryDeltas.remove(item);
+        }
+        bumpSyncRevision();
+    }
+
+    public void markInventoryBoundDelta(AutomatedFacilityInventory.BoundKind kind, String resourceKey, boolean present,
+        long amount) {
+        if (kind == null || resourceKey == null || resourceKey.isEmpty()) return;
+        dirtyInventoryBoundDeltas.add(new InventoryBoundDelta(kind, resourceKey, present, amount));
+        bumpSyncRevision();
+        markDirty();
+    }
+
+    public record InventoryBoundDelta(AutomatedFacilityInventory.BoundKind kind, String resourceKey, boolean present,
+        long amount) {}
 
     public long getEnergyStored() {
         return energyStored;
