@@ -234,18 +234,30 @@ public final class CelestialClient {
                 .minerOreBlacklisted(assetId, moduleIndex, module.id, oreKey, blacklisted));
     }
 
-    public static void updateMinerSettingsGroup(ID assetId, int moduleIndex, short groupId) {
+    public static void updateModuleSettingsGroup(ID assetId, int moduleIndex, short groupId) {
         sendModuleUpdate(
             assetId,
             moduleIndex,
-            module -> AssetModuleUpdatePacket.minerSettingsGroup(assetId, moduleIndex, module.id, groupId));
+            module -> AssetModuleUpdatePacket.moduleSettingsGroup(assetId, moduleIndex, module.id, groupId));
     }
 
-    public static void createMinerSettingsGroup(ID assetId, int moduleIndex) {
+    public static void createModuleSettingsGroup(ID assetId, int moduleIndex) {
+        createModuleSettingsGroup(assetId, moduleIndex, "");
+    }
+
+    public static void createModuleSettingsGroup(ID assetId, int moduleIndex, String displayName) {
         sendModuleUpdate(
             assetId,
             moduleIndex,
-            module -> AssetModuleUpdatePacket.createMinerSettingsGroup(assetId, moduleIndex, module.id));
+            module -> AssetModuleUpdatePacket.createModuleSettingsGroup(assetId, moduleIndex, module.id, displayName));
+    }
+
+    public static void renameModuleSettingsGroup(ID assetId, int moduleIndex, short groupId, String displayName) {
+        sendModuleUpdate(
+            assetId,
+            moduleIndex,
+            module -> AssetModuleUpdatePacket
+                .renameModuleSettingsGroup(assetId, moduleIndex, module.id, groupId, displayName));
     }
 
     public static void cancelModuleOperation(ID assetId, int moduleIndex) {
