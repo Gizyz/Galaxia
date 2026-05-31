@@ -367,4 +367,46 @@ public class GalaxiaStructureUtility {
             };
         }
     }
+
+    @FunctionalInterface
+    public interface BlockPosConsumer<T> {
+
+        void accept(T t, int x, int y, int z);
+    }
+
+    public static <T> IExtendedStructureElement<T> ofBlockPosAdderNoMetaForceCheck(BlockPosConsumer<T> consumer,
+        Block block, int hintMeta) {
+        return new IExtendedStructureElement<T>() {
+
+            @Override
+            public Block getValidBlock() {
+                return block;
+            }
+
+            @Override
+            public boolean check(T t, World world, int x, int y, int z) {
+                if (block == world.getBlock(x, y, z)) {
+                    consumer.accept(t, x, y, z);
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            public boolean couldBeValid(T t, World world, int x, int y, int z, ItemStack trigger) {
+                return check(t, world, x, y, z);
+            }
+
+            @Override
+            public boolean spawnHint(T t, World world, int x, int y, int z, ItemStack trigger) {
+                StructureLibAPI.hintParticle(world, x, y, z, block, hintMeta);
+                return true;
+            }
+
+            @Override
+            public boolean placeBlock(T t, World world, int x, int y, int z, ItemStack trigger) {
+                return false;
+            }
+        };
+    }
 }
