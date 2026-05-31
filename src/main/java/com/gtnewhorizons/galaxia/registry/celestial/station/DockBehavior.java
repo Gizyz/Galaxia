@@ -12,11 +12,13 @@ import com.cleanroommc.modularui.widgets.TextWidget;
 import com.gtnewhorizon.structurelib.structure.IStructureDefinition;
 import com.gtnewhorizons.galaxia.api.BlockPos;
 import com.gtnewhorizons.galaxia.compat.GalaxiaStructureUtility;
+import com.gtnewhorizons.galaxia.compat.gt.MTEStationPlug;
+import com.gtnewhorizons.galaxia.compat.gt.MTEStationPlugMulti;
 import com.gtnewhorizons.galaxia.compat.structure.ArbitraryShapeDefinition;
 import com.gtnewhorizons.galaxia.core.config.ConfigStructures;
 import com.gtnewhorizons.galaxia.registry.block.GalaxiaBlocksEnum;
+import com.gtnewhorizons.galaxia.registry.celestial.station.attachments.StationAttachmentRegistry;
 import com.gtnewhorizons.galaxia.registry.dimension.DimensionDef;
-import com.gtnewhorizons.galaxia.registry.interfaces.IStationAttachment;
 import com.gtnewhorizons.galaxia.registry.interfaces.IStationBehaviorWithAttachments;
 
 public class DockBehavior implements IStationBehaviorWithAttachments {
@@ -37,7 +39,7 @@ public class DockBehavior implements IStationBehaviorWithAttachments {
                     .stream()
                     .filter(b -> ALL_VALID_DOCK_BLOCKS.contains(b))
                     .map(b -> GalaxiaStructureUtility.ofBlock(b, 0)))
-            .addElement(GalaxiaStructureUtility.ofTileAdderCheckHintsAnyMeta((dock, tileEntity) -> {
+            .addElement(GalaxiaStructureUtility.<TileStation>ofTileAdderCheckHintsAnyMeta((dock, tileEntity) -> {
                 if (tileEntity instanceof TileEntityAirlock airlock) {
                     if (!airlock.isStructureValid()) return false;
                     dock.registerAirlock(airlock.xCoord, airlock.yCoord, airlock.zCoord);
@@ -45,22 +47,36 @@ public class DockBehavior implements IStationBehaviorWithAttachments {
                 }
                 return false;
             }, GalaxiaBlocksEnum.AIRLOCK_CONTROLLER.get(), 0))
-            .addElement(GalaxiaStructureUtility.ofTileAdderCheckHintsAnyMeta((dock, tileEntity) -> {
-                if (tileEntity instanceof IStationAttachment) {
-                    BlockPos pos = new BlockPos(tileEntity.xCoord, tileEntity.yCoord, tileEntity.zCoord);
-                    dock.addAttachment(pos);
-                    return true;
-                }
-                return false;
-            }, GalaxiaBlocksEnum.HAMMER_TARGET.get(), 0))
-            .addElement(GalaxiaStructureUtility.ofTileAdderCheckHintsAnyMeta((dock, tileEntity) -> {
-                if (tileEntity instanceof IStationAttachment) {
-                    BlockPos pos = new BlockPos(tileEntity.xCoord, tileEntity.yCoord, tileEntity.zCoord);
-                    dock.addAttachment(pos);
-                    return true;
-                }
-                return false;
-            }, GalaxiaBlocksEnum.HAMMER_CANNON.get(), 0))
+            .addElement(
+                GalaxiaStructureUtility.<TileStation>stationHatchAdder(
+                    GalaxiaBlocksEnum.RUSTY_SCAFFOLDING.get(),
+                    0,
+                    MTEStationPlug.ID,
+                    (dock, x, y, z) -> dock.addStationPlug(x, y, z)))
+            .addElement(
+                GalaxiaStructureUtility.<TileStation>stationHatchAdder(
+                    GalaxiaBlocksEnum.RUSTY_SCAFFOLDING.get(),
+                    0,
+                    MTEStationPlugMulti.ID,
+                    (dock, x, y, z) -> dock.addStationPlug(x, y, z)))
+            .addInteriorElement(
+                GalaxiaStructureUtility.<TileStation>ofTileAdderCheckHintsAnyMeta((dock, tileEntity) -> {
+                    if (StationAttachmentRegistry.isRegisteredTileEntity(tileEntity)) {
+                        BlockPos pos = new BlockPos(tileEntity.xCoord, tileEntity.yCoord, tileEntity.zCoord);
+                        dock.addAttachment(pos);
+                        return true;
+                    }
+                    return false;
+                }, GalaxiaBlocksEnum.HAMMER_TARGET.get(), 0))
+            .addInteriorElement(
+                GalaxiaStructureUtility.<TileStation>ofTileAdderCheckHintsAnyMeta((dock, tileEntity) -> {
+                    if (StationAttachmentRegistry.isRegisteredTileEntity(tileEntity)) {
+                        BlockPos pos = new BlockPos(tileEntity.xCoord, tileEntity.yCoord, tileEntity.zCoord);
+                        dock.addAttachment(pos);
+                        return true;
+                    }
+                    return false;
+                }, GalaxiaBlocksEnum.HAMMER_CANNON.get(), 0))
             .embedDefinition(TileEntityAirlock.STRUCTURE_PIECE_MAIN, TileEntityAirlock.STRUCTURE_DEFINITION)
             .withSearchRadius(ConfigStructures.open.searchRadius)
             .open()
@@ -69,7 +85,7 @@ public class DockBehavior implements IStationBehaviorWithAttachments {
 
     @Override
     public int getSearchRadius() {
-        return 0;
+        return ConfigStructures.open.searchRadius;
     }
 
     @Override
